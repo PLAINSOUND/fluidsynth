@@ -129,7 +129,7 @@ endif ( CMAKE_SYSTEM MATCHES "OS2" )
 set(CMAKE_C_STANDARD 90)
 
 # the default C++ standard to use for all targets
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 
 # whether to use gnu extensions
 set(CMAKE_C_EXTENSIONS ON)
