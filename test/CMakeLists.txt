@@ -3,7 +3,17 @@ ENABLE_TESTING()
 include ( FluidUnitTest )
 
 # first define the test target, used by the macros below
-add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>  --output-on-failure)
+if( NOT ANDROID )
+    add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>  --output-on-failure)
+else()
+    # skip ctest on android, execution must be done via android emulator
+    add_custom_target(check)
+endif()
+
+# stage the unit test data files (see TEST_DATA_FILES in the top-level
+# CMakeLists.txt) into ${CMAKE_BINARY_DIR}/test so the tests can access them
+# via relative paths
+add_dependencies(check test_data)
 
 
 ## add unit tests here ##
@@ -28,6 +38,7 @@ ADD_FLUID_TEST(test_sfont_zone)
 ADD_FLUID_TEST(test_seq_event_queue_sort)
 ADD_FLUID_TEST(test_seq_scale)
 ADD_FLUID_TEST(test_seq_evt_order)
+ADD_FLUID_TEST(test_midi_parser_realtime)
 ADD_FLUID_TEST(test_seq_event_queue_remove)
 ADD_FLUID_TEST(test_jack_obtaining_synth)
 ADD_FLUID_TEST(test_utf8_open)
@@ -45,7 +56,9 @@ ADD_FLUID_TEST(test_shell_parse_argv_internal)
 ADD_FLUID_TEST(test_sample_pitch_calculation)
 ADD_FLUID_TEST(test_mts_cc_tuning)
 ADD_FLUID_TEST(test_voice_callback)
+ADD_FLUID_TEST(test_voice_reuse_gain)
 ADD_FLUID_TEST(test_rvoice_dsp_interpolate)
+ADD_FLUID_TEST(test_iir_coefficient_reuse)
 
 if ( NOT OSAL STREQUAL "embedded" )
     ADD_FLUID_TEST(test_threading)
@@ -723,10 +736,11 @@ endif (ENABLE_NATIVE_DLS )
     add_dependencies(check_rendering renderDMOD)
     add_dependencies(check_rendering renderRPN)
     add_dependencies(check_rendering renderSf2NRPN)
-    # The check_rendering target is used by the rendering regression tests, rendering the reverbOverview would make the regression tests take way too long!
+    # Rendering the reverbOverview would make the regression tests take way too long in CI!
     #add_dependencies(check_rendering renderReverbOverview)
     add_dependencies(check_rendering renderMtsTests)
-    # Temporarily disable limiter tests, because those tests will fail with reference fluidsynth 2.5.x, as it is lacking the limiter
     add_dependencies(check_rendering renderLimiterTests)
+    add_dependencies(check_rendering render1505)
+    add_dependencies(check_rendering renderGSDT1)
 
 endif ( NOT CMAKE_GENERATOR MATCHES "Visual Studio" )

@@ -16,6 +16,7 @@ on:
       - '.github/workflows/sonarcloud.yml'
       - '.github/workflows/solaris.yml'
       - '.github/workflows/windows.yml'
+      - 'test/run-android-tests.sh'
       - 'README.md'
 
 env:
@@ -28,7 +29,7 @@ defaults:
 jobs:
     freebsd:
         name: FreeBSD
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         strategy:
           fail-fast: false
           matrix:
@@ -36,8 +37,6 @@ jobs:
               - release: "15"
                 arch: "x86_64"
               - release: "14"
-                arch: "x86_64"
-              - release: "13"
                 arch: "x86_64"
         steps:
         - name: Checkout

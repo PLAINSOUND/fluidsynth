@@ -17,6 +17,7 @@ on:
       - '.github/workflows/ios.yml'
       - '.github/workflows/os2.yml'
       - '.github/workflows/rendering-regression.yml'
+      - 'test/run-android-tests.sh'
       - 'README.md'
     tags:
       - 'v*'
@@ -366,7 +367,7 @@ jobs:
     needs:
       - acceptance-test
       - msvc-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: 🚀 Publish Release Artifacts
     steps:
     - uses: actions/checkout@v7
