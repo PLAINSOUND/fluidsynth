@@ -239,7 +239,158 @@ static void test_custom_mapping(fluid_mod_t *mod)
     }
 }
 
-// this tests ensures that samples with invalid SfSampleType flag combinations are rejected
+static void test_explicit_source_values(void)
+{
+    fluid_mod_t *mod = new_fluid_mod();
+    int pressure;
+
+    TEST_ASSERT(mod != NULL);
+
+    fluid_mod_set_source1(mod, FLUID_MOD_CHANNELPRESSURE,
+                         FLUID_MOD_GC | FLUID_MOD_LINEAR |
+                         FLUID_MOD_UNIPOLAR | FLUID_MOD_POSITIVE);
+    fluid_mod_set_source2(mod, FLUID_MOD_NONE, 0);
+    fluid_mod_set_dest(mod, GEN_ATTENUATION);
+    fluid_mod_set_amount(mod, 100.0);
+
+    for(pressure = 0; pressure <= 127; pressure++)
+    {
+        fluid_real_t actual;
+        fluid_real_t expected;
+
+        actual = fluid_mod_get_value_with_sources(
+            mod, NULL, pressure, 128.0, 128.0, 128.0);
+
+        expected = 100.0 * pressure / 128.0;
+
+        TEST_ASSERT(FLUID_FABS(actual - expected) < 0.00001);
+    }
+
+    /* With neither source assigned, both mapped inputs equal one.
+     * This also permits an ordinary-path comparison without a voice.
+     */
+    fluid_mod_set_source1(mod, FLUID_MOD_NONE, 0);
+
+    TEST_ASSERT(FLUID_FABS(
+        fluid_mod_get_value_with_sources(
+            mod, NULL, 128.0, 128.0, 128.0, 128.0)
+        - fluid_mod_get_value(mod, NULL)) < 0.00001);
+
+    delete_fluid_mod(mod);
+}
+
+static void test_fractional_source_values(void)
+{
+    const int curves[] = {
+        FLUID_MOD_LINEAR,
+        FLUID_MOD_CONCAVE,
+        FLUID_MOD_CONVEX
+    };
+    const int sources[] = {
+        FLUID_MOD_CHANNELPRESSURE,
+        FLUID_MOD_KEYPRESSURE
+    };
+
+    fluid_mod_t *mod = new_fluid_mod();
+    int curve;
+    int source;
+    int position;
+    int negative;
+
+    TEST_ASSERT(mod != NULL);
+
+    fluid_mod_set_dest(mod, GEN_ATTENUATION);
+    fluid_mod_set_amount(mod, 1.0);
+
+    for(source = 0; source < 2; source++)
+    {
+        for(position = 0; position < 2; position++)
+        {
+            for(curve = 0; curve < 3; curve++)
+            {
+                for(negative = 0; negative < 2; negative++)
+                {
+                    int flags;
+                    fluid_real_t low;
+                    fluid_real_t middle;
+                    fluid_real_t high;
+
+                    flags = FLUID_MOD_GC | FLUID_MOD_UNIPOLAR |
+                            curves[curve] |
+                            (negative ? FLUID_MOD_NEGATIVE :
+                                        FLUID_MOD_POSITIVE);
+
+                    if(position == 0)
+                    {
+                        fluid_mod_set_source1(mod, sources[source], flags);
+                        fluid_mod_set_source2(mod, FLUID_MOD_NONE, 0);
+
+                        low = fluid_mod_get_value_with_sources(
+                            mod, NULL, 64.0, 128.0, 128.0, 128.0);
+                        middle = fluid_mod_get_value_with_sources(
+                            mod, NULL, 64.25, 128.0, 128.0, 128.0);
+                        high = fluid_mod_get_value_with_sources(
+                            mod, NULL, 65.0, 128.0, 128.0, 128.0);
+                    }
+                    else
+                    {
+                        fluid_mod_set_source1(mod, FLUID_MOD_NONE, 0);
+                        fluid_mod_set_source2(mod, sources[source], flags);
+
+                        low = fluid_mod_get_value_with_sources(
+                            mod, NULL, 128.0, 128.0, 64.0, 128.0);
+                        middle = fluid_mod_get_value_with_sources(
+                            mod, NULL, 128.0, 128.0, 64.25, 128.0);
+                        high = fluid_mod_get_value_with_sources(
+                            mod, NULL, 128.0, 128.0, 65.0, 128.0);
+                    }
+
+                    if(negative)
+                    {
+                        TEST_ASSERT(low > middle);
+                        TEST_ASSERT(middle > high);
+                    }
+                    else
+                    {
+                        TEST_ASSERT(low < middle);
+                        TEST_ASSERT(middle < high);
+                    }
+
+                    if(curves[curve] == FLUID_MOD_LINEAR)
+                    {
+                        fluid_real_t expected = negative
+                            ? (127.0 - 64.25) / 128.0
+                            : 64.25 / 128.0;
+
+                        TEST_ASSERT(
+                            FLUID_FABS(middle - expected) < 0.000001);
+                    }
+                }
+            }
+        }
+    }
+
+    delete_fluid_mod(mod);
+}
+
+static void test_explicit_source_default_exception(void)
+{
+    extern fluid_mod_t default_vel2filter_mod;
+
+    fluid_mod_t *mod = new_fluid_mod();
+
+    TEST_ASSERT(mod != NULL);
+
+    fluid_mod_clone(mod, &default_vel2filter_mod);
+
+    TEST_ASSERT(fluid_mod_get_value(mod, NULL) == 0.0);
+
+    TEST_ASSERT(fluid_mod_get_value_with_sources(
+        mod, NULL, 64.25, 128.0, 127.0, 128.0) == 0.0);
+
+    delete_fluid_mod(mod);
+}
+
 int main(void)
 {
     fluid_mod_t* mod = new_fluid_mod();
@@ -251,6 +402,10 @@ int main(void)
     test_custom_mapping(mod);
 
     delete_fluid_mod(mod);
+
+    test_explicit_source_values();
+    test_fractional_source_values();
+    test_explicit_source_default_exception();
 
     return EXIT_SUCCESS;
 }

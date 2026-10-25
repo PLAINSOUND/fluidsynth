@@ -27,6 +27,7 @@
 #include "fluid_lfo.h"
 #include "fluid_phase.h"
 #include "fluid_sfont.h"
+#include "fluid_rvoice_mod.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -134,6 +135,11 @@ struct _fluid_rvoice_dsp_t
    ever add surround positioning, or stereo reverb/chorus */
 #define FLUID_RVOICE_MAX_BUFS (4)
 
+/* Bounded storage: no allocation while rendering. The future synthesis-side
+ * selector must fall back to immediate modulation if these slots are full.
+ */
+#define FLUID_RVOICE_MAX_SLEW_MODS FLUID_NUM_SLEW_MOD
+
 /*
  * rvoice mixer-related parameters
  */
@@ -164,6 +170,11 @@ struct _fluid_rvoice_t
     fluid_iir_filter_t resonant_custom_filter; /* optional custom/general-purpose IIR resonant filter */
     fluid_rvoice_buffers_t buffers;
 
+    fluid_rvoice_mod_t attenuation_mods[FLUID_RVOICE_MAX_SLEW_MODS];
+    unsigned int attenuation_mod_count; /* Zero preserves the legacy path. */
+    fluid_real_t immediate_attenuation; /* Unclipped, excluding these slots. */
+    fluid_real_t slew_sample_rate;
+
     /* Finished callback, invoked from the render thread when the rvoice
      * finishes and is about to be removed from the mixer's active list. */
     fluid_voice_callback_t finished_cb;
@@ -187,6 +198,10 @@ DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_interp_method);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_root_pitch_hz);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_pitch);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_attenuation);
+/* param[0].real: unclipped immediate subtotal; param[1].i: configured slot count.
+ * Publish after the corresponding slot configurations, before rendering.
+ */
+DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_slew_attenuation);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_min_attenuation_cB);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_viblfo_to_pitch);
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_modlfo_to_pitch);

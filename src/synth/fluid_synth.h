@@ -151,6 +151,9 @@ struct _fluid_synth_t
     fluid_list_t *fonts_to_be_unloaded; /**< list of timers that try to unload a soundfont */
 
     float gain;                        /**< master gain */
+    double pressure_attenuation_slew_ms; /**< Synthesis-side, API-lock protected. */
+    double expression_attenuation_slew_ms;
+    double attenuation_slew_min_ms;
     fluid_channel_t **channel;         /**< the channels */
     int nvoice;                        /**< the length of the synthesis process array (max polyphony allowed) */
     fluid_voice_t **voice;             /**< the synthesis voices */

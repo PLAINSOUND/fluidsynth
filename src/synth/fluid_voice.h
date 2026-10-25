@@ -111,6 +111,16 @@ struct _fluid_voice_t
 
     int mod_count;
     fluid_mod_t mod[FLUID_NUM_MOD];
+    /* Producer-owned route assignments, never inferred by reading rvoice.
+     * Slot capacity is shared with the renderer through fluidsynth_priv.h.
+     */
+    int pressure_slew_count;
+    int pressure_slew_indices[FLUID_NUM_SLEW_MOD];
+    fluid_mod_t pressure_slew_definitions[FLUID_NUM_SLEW_MOD];
+    double pressure_slew_ms;
+    double expression_slew_ms;
+    double minimum_slew_ms;
+    int pressure_slew_failed;
     fluid_gen_t gen[GEN_LAST];
 
     /* user callback */

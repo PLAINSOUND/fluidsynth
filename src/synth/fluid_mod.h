@@ -9,7 +9,7 @@
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
@@ -56,6 +56,7 @@ enum
     FLUID_MOD_SIGN_MASK = FLUID_MOD_POSITIVE | FLUID_MOD_NEGATIVE,
 };
 
+fluid_real_t fluid_mod_get_value_with_sources(fluid_mod_t *mod, fluid_voice_t *voice, fluid_real_t value1, fluid_real_t range1, fluid_real_t value2, fluid_real_t range2);
 fluid_real_t fluid_mod_get_value(fluid_mod_t *mod, fluid_voice_t *voice);
 int fluid_mod_check_sources(const fluid_mod_t *mod, char *name);
 

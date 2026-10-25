@@ -24,6 +24,27 @@
 
 static void fluid_rvoice_noteoff_LOCAL(fluid_rvoice_t *voice, unsigned int min_ticks);
 
+/* Consumer only: preserve immediate contributions, add selected routes, then
+ * clip once. elapsed_samples == 0 permits event-time recombination without
+ * advancing the audio clock (important for legato retrigger calculations).
+ */
+static void
+fluid_rvoice_update_slew_attenuation(fluid_rvoice_t *voice, unsigned int elapsed_samples)
+{
+    fluid_real_t attenuation = voice->immediate_attenuation;
+    unsigned int i;
+
+    for(i = 0; i < voice->attenuation_mod_count; i++)
+    {
+        fluid_rvoice_mod_advance(&voice->attenuation_mods[i], elapsed_samples);
+        attenuation += fluid_rvoice_mod_evaluate(&voice->attenuation_mods[i]);
+    }
+
+    fluid_clip(attenuation, 0.0, 1440.0);
+    voice->dsp.prev_attenuation = voice->dsp.attenuation;
+    voice->dsp.attenuation = attenuation;
+}
+
 /**
  * @return -1 if voice is quiet, 0 if voice has finished, 1 otherwise
  */
@@ -328,6 +349,14 @@ fluid_rvoice_write(fluid_rvoice_t *voice, fluid_real_t *dsp_buf)
 
     voice->envlfo.ticks += FLUID_BUFSIZE;
 
+    /* Advance even during envelope delay or temporarily silent blocks.
+     * The zero-count branch leaves the normal rendering path unchanged.
+     */
+    if(voice->attenuation_mod_count != 0)
+    {
+        fluid_rvoice_update_slew_attenuation(voice, FLUID_BUFSIZE);
+    }
+
     /******************* vol env **********************/
 
     fluid_adsr_env_calc(&voice->envlfo.volenv);
@@ -548,6 +577,13 @@ DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_buffers_set_mapping)
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_reset)
 {
     fluid_rvoice_t *voice = obj;
+
+    /* Records belong to this rendering voice, including while it is the
+     * overflow voice. Reuse must never inherit a previous note's ramps.
+     */
+    FLUID_MEMSET(voice->attenuation_mods, 0, sizeof(voice->attenuation_mods));
+    voice->attenuation_mod_count = 0;
+    voice->immediate_attenuation = 0.0;
 
     voice->dsp.has_looped = 0;
     voice->envlfo.ticks = 0;
@@ -773,6 +809,18 @@ DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_output_rate)
 {
     fluid_rvoice_t *voice = obj;
     fluid_real_t value = param[0].real;
+    unsigned int i;
+
+    if(voice->slew_sample_rate > 0.0 && value > 0.0)
+    {
+        for(i = 0; i < voice->attenuation_mod_count; i++)
+        {
+            voice->attenuation_mods[i].full_range_samples *= value / voice->slew_sample_rate;
+            voice->attenuation_mods[i].expression_full_range_samples *= value / voice->slew_sample_rate;
+            voice->attenuation_mods[i].minimum_samples *= value / voice->slew_sample_rate;
+        }
+    }
+    voice->slew_sample_rate = value;
 
     voice->dsp.max_filter_fres_ct = fluid_hz2ct(0.45f * value);
 }
@@ -807,8 +855,44 @@ DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_attenuation)
     fluid_rvoice_t *voice = obj;
     fluid_real_t value = param[0].real;
 
+    /* Legacy event supplies the complete attenuation, not a split subtotal. */
+    voice->attenuation_mod_count = 0;
+    voice->immediate_attenuation = value;
+
     voice->dsp.prev_attenuation = voice->dsp.attenuation;
     voice->dsp.attenuation = value;
+}
+
+DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_slew_attenuation)
+{
+    fluid_rvoice_t *voice = obj;
+    int count = param[1].i;
+    int i;
+
+    if(count < 0 || count > FLUID_RVOICE_MAX_SLEW_MODS)
+    {
+        return;
+    }
+
+    for(i = 0; i < count; i++)
+    {
+        if(!voice->attenuation_mods[i].configured)
+        {
+            return;
+        }
+    }
+
+    voice->attenuation_mod_count = count;
+    voice->immediate_attenuation = param[0].real;
+    /* Conservative until route-aware lifetime bounds are implemented.
+     * Quiet voices may become louder as pressure changes: do not retire them
+     * using a bound calculated from the unsmoothed pressure target.
+     */
+    if(count != 0)
+    {
+        voice->dsp.min_attenuation_cB = 0.0;
+    }
+    fluid_rvoice_update_slew_attenuation(voice, 0);
 }
 
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_min_attenuation_cB)
@@ -816,7 +900,7 @@ DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_min_attenuation_cB)
     fluid_rvoice_t *voice = obj;
     fluid_real_t value = param[0].real;
 
-    voice->dsp.min_attenuation_cB = value;
+    voice->dsp.min_attenuation_cB = voice->attenuation_mod_count ? 0.0 : value;
 }
 
 DECLARE_FLUID_RVOICE_FUNCTION(fluid_rvoice_set_viblfo_to_pitch)

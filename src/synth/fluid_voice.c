@@ -27,6 +27,7 @@
 #include "fluid_sfont.h"
 #include "fluid_rvoice_event.h"
 #include "fluid_defsfont.h"
+#include <math.h>
 
 /* used for filter turn off optimization - if filter cutoff is above the
    specified value and filter q is below the other value, turn filter off */
@@ -320,6 +321,11 @@ fluid_voice_init(fluid_voice_t *voice, fluid_sample_t *sample,
     voice->vel = (unsigned char) vel;
     voice->channel = channel;
     voice->mod_count = 0;
+    voice->pressure_slew_count = 0;
+    voice->pressure_slew_ms = 0.0;
+    voice->expression_slew_ms = 0.0;
+    voice->minimum_slew_ms = 0.0;
+    voice->pressure_slew_failed = 0;
     voice->start_time = start_time;
     voice->has_noteoff = 0;
     voice->callback = NULL;
@@ -761,6 +767,167 @@ calculate_hold_decay_buffers(fluid_voice_t *voice, int gen_base,
  *
  * Calling this function is only necessary after changing a generator of an already playing voice.
  */
+/* Called under the existing serialized synthesis/API producer. Queue capacity
+ * can only increase while we prepare a batch: only the consumer runs in
+ * parallel. Never inspect render-owned slot contents or ramp positions here.
+ */
+static int
+fluid_voice_sync_pressure_attenuation(fluid_voice_t *voice, fluid_real_t full_value)
+{
+    int indices[FLUID_NUM_SLEW_MOD];
+    int configure_slot[FLUID_NUM_SLEW_MOD];
+    fluid_real_t values[FLUID_NUM_SLEW_MOD][2];
+    int count = 0, eligible = 0, reconfigure, duration_changed, needed, i, j, scan;
+    double ms = voice->channel->synth->pressure_attenuation_slew_ms;
+    double expression_ms = voice->channel->synth->expression_attenuation_slew_ms;
+    double minimum_ms = voice->channel->synth->attenuation_slew_min_ms;
+    fluid_real_t samples = ms * voice->output_rate / 1000.0;
+    fluid_real_t expression_samples = expression_ms * voice->output_rate / 1000.0;
+    fluid_real_t immediate = full_value;
+    fluid_rvoice_param_t param[MAX_EVENT_PARAMS] = {0};
+
+    if(ms > 0.0 || expression_ms > 0.0)
+    {
+        /* Keep existing slots stable while either control is enabled. A route
+         * whose own duration becomes zero remains immediate in its slot; this
+         * avoids restarting unrelated ramps when the other fader changes.
+         */
+        for(scan = 0; scan < voice->pressure_slew_count + voice->mod_count; scan++)
+        {
+            int retained = scan < voice->pressure_slew_count;
+            fluid_mod_t *mod;
+            fluid_rvoice_mod_t checked;
+            int selected;
+            i = retained ? voice->pressure_slew_indices[scan] : scan - voice->pressure_slew_count;
+            if(i >= voice->mod_count) continue;
+            for(j = 0; j < count && indices[j] != i; j++) {}
+            if(j < count) continue;
+            mod = &voice->mod[i];
+            selected = (ms > 0.0 &&
+                (fluid_rvoice_mod_is_pressure(mod->src1, mod->flags1) ||
+                 fluid_rvoice_mod_is_pressure(mod->src2, mod->flags2))) ||
+                (expression_ms > 0.0 &&
+                (fluid_rvoice_mod_is_expression_y(mod->src1, mod->flags1) ||
+                 fluid_rvoice_mod_is_expression_y(mod->src2, mod->flags2)));
+            if((!retained && !selected) || fluid_rvoice_mod_init_times(&checked, mod, 0.0, 128.0,
+                                    0.0, 128.0, samples, expression_samples) != FLUID_OK)
+            {
+                continue;
+            }
+            eligible++;
+            if(count == FLUID_NUM_SLEW_MOD)
+            {
+                continue; /* Excess routes remain in the immediate subtotal. */
+            }
+            indices[count] = i;
+            for(j = 0; j < 2; j++)
+            {
+                fluid_real_t range = 128.0;
+                values[count][j] = fluid_mod_get_source_value(
+                    j ? mod->src2 : mod->src1, j ? mod->flags2 : mod->flags1,
+                    &range, voice);
+            }
+            if(!fluid_rvoice_mod_config_valid_times(mod, values[count][0], values[count][1],
+                                                     samples, expression_samples))
+            {
+                continue; /* Unsupported input stays immediate, before any push. */
+            }
+            count++;
+        }
+    }
+
+    reconfigure = count != voice->pressure_slew_count;
+    for(i = 0; i < count && !reconfigure; i++)
+    {
+        fluid_mod_t *mod = &voice->mod[indices[i]];
+        fluid_mod_t *previous = &voice->pressure_slew_definitions[i];
+        reconfigure = indices[i] != voice->pressure_slew_indices[i] ||
+                      !fluid_mod_test_identity(mod, previous) || mod->amount != previous->amount ||
+                      mod->trans != previous->trans;
+    }
+    duration_changed = ms != voice->pressure_slew_ms || expression_ms != voice->expression_slew_ms;
+    needed = 1 + (count == 0 && voice->pressure_slew_count != 0);
+    for(i = 0; i < count; i++)
+    {
+        fluid_mod_t *mod = &voice->mod[indices[i]];
+        fluid_mod_t *previous = &voice->pressure_slew_definitions[i];
+        configure_slot[i] = i >= voice->pressure_slew_count ||
+            indices[i] != voice->pressure_slew_indices[i] ||
+            !fluid_mod_test_identity(mod, previous) || mod->amount != previous->amount ||
+            mod->trans != previous->trans;
+        needed += 1 + (!configure_slot[i] && duration_changed);
+        if(minimum_ms != voice->minimum_slew_ms || (configure_slot[i] && minimum_ms > 0.0)) needed++;
+    }
+
+    if(fluid_ringbuffer_get_inptr(voice->eventhandler->queue,
+        fluid_atomic_int_get(&voice->eventhandler->queue_stored) + needed - 1) == NULL)
+    {
+        FLUID_LOG(FLUID_WARN, "Pressure slew update deferred: render event queue is full");
+        return FLUID_FAILED;
+    }
+
+    /* Subtract ONLY from the unclipped sum. Other contributions, including
+     * unsupported/excess pressure routes, remain immediate and are not
+     * re-evaluated here (custom callbacks may have side effects).
+     */
+    for(i = 0; i < count; i++)
+    {
+        fluid_mod_t *mod = &voice->mod[indices[i]];
+        immediate -= fluid_mod_get_value(mod, voice);
+        if(configure_slot[i])
+        {
+            if(fluid_rvoice_mod_enqueue_config_times(voice->eventhandler,
+                &voice->rvoice->attenuation_mods[i], mod,
+                values[i][0], values[i][1], samples, expression_samples) != FLUID_OK)
+            {
+                /* All data/capacity must be validated before the first push. */
+                return FLUID_FAILED;
+            }
+        }
+        else
+        {
+            if(duration_changed)
+            {
+                fluid_rvoice_mod_enqueue_times(voice->eventhandler,
+                    &voice->rvoice->attenuation_mods[i], samples, expression_samples);
+            }
+            fluid_rvoice_mod_enqueue_inputs(voice->eventhandler,
+                &voice->rvoice->attenuation_mods[i], values[i][0], values[i][1]);
+        }
+    }
+
+    for(i = 0; i < count; i++)
+    {
+        if(minimum_ms != voice->minimum_slew_ms || (configure_slot[i] && minimum_ms > 0.0))
+            fluid_rvoice_mod_enqueue_minimum(voice->eventhandler,
+                &voice->rvoice->attenuation_mods[i], minimum_ms * voice->output_rate / 1000.0);
+    }
+    param[0].real = immediate;
+    param[1].i = count;
+    fluid_rvoice_eventhandler_push(voice->eventhandler,
+        fluid_rvoice_set_slew_attenuation, voice->rvoice, param);
+    if(count == 0 && voice->pressure_slew_count != 0)
+    {
+        UPDATE_RVOICE_R1(fluid_rvoice_set_min_attenuation_cB,
+                         fluid_voice_get_lower_boundary_for_attenuation(voice));
+    }
+    if(eligible > FLUID_NUM_SLEW_MOD && (reconfigure || duration_changed))
+    {
+        FLUID_LOG(FLUID_WARN, "Pressure slew: %d routes exceed the %d-slot voice capacity and remain immediate",
+                  eligible - FLUID_NUM_SLEW_MOD, FLUID_NUM_SLEW_MOD);
+    }
+    for(i = 0; i < count; i++)
+    {
+        voice->pressure_slew_indices[i] = indices[i];
+        fluid_mod_clone(&voice->pressure_slew_definitions[i], &voice->mod[indices[i]]);
+    }
+    voice->pressure_slew_count = count;
+    voice->pressure_slew_ms = ms;
+    voice->expression_slew_ms = expression_ms;
+    voice->minimum_slew_ms = minimum_ms;
+    return FLUID_OK;
+}
+
 void
 fluid_voice_update_param(fluid_voice_t *voice, int gen)
 {
@@ -794,7 +961,18 @@ fluid_voice_update_param(fluid_voice_t *voice, int gen)
          * Motivation for range checking:
          * OHPiano.SF2 sets initial attenuation to a whooping -96 dB */
         fluid_clip(voice->attenuation, 0.f, 1440.f);
-        UPDATE_RVOICE_R1(fluid_rvoice_set_attenuation, voice->attenuation);
+        if(voice->channel->synth->pressure_attenuation_slew_ms > 0.0 ||
+           voice->channel->synth->expression_attenuation_slew_ms > 0.0 || voice->pressure_slew_count)
+        {
+            if(fluid_voice_sync_pressure_attenuation(voice, x) != FLUID_OK)
+            {
+                voice->pressure_slew_failed = 1;
+            }
+        }
+        else
+        {
+            UPDATE_RVOICE_R1(fluid_rvoice_set_attenuation, voice->attenuation);
+        }
         break;
 
     /* The pitch is calculated from three different generators.
@@ -1148,7 +1326,7 @@ fluid_voice_update_param(fluid_voice_t *voice, int gen)
  *
  * In this implementation, I want to make sure that all controllers
  * are event based: the parameter values of the DSP algorithm should
- * only be updates when a controller event arrived and not at every
+ * only be updated when a controller event arrived and not at every
  * iteration of the audio cycle (which would probably be feasible if
  * the synth was made in silicon).
  *
@@ -1163,7 +1341,7 @@ fluid_voice_update_param(fluid_voice_t *voice, int gen)
  * The generator flag is set to indicate the parameters must be updated.
  * This avoid the risk to call 'fluid_voice_update_param' several
  * times for the same generator if several modulators have that generator as
- * destination. So every changed generators are updated only once.
+ * destination. So every changed generator is updated only once.
  */
 
  /* bit table for each generator being updated. The bits are packed in variables
@@ -1191,6 +1369,7 @@ int fluid_voice_modulate(fluid_voice_t *voice, int cc, int ctrl)
 
     /* Clears registered bits table of updated generators */
     uint32_t updated_gen_bit[SIZE_UPDATED_GEN_BIT] = {0};
+    voice->pressure_slew_failed = 0;
 
     /*    printf("Chan=%d, CC=%d, Src=%d, Val=%d\n", voice->channel->channum, cc, ctrl, val); */
 
@@ -1232,7 +1411,7 @@ int fluid_voice_modulate(fluid_voice_t *voice, int cc, int ctrl)
         }
     }
 
-    return FLUID_OK;
+    return voice->pressure_slew_failed ? FLUID_FAILED : FLUID_OK;
 }
 
 /**

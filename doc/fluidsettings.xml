@@ -461,6 +461,58 @@ Developers:
                 Sets the stereo spread of the reverb signal, i.e. how much the wet-left signal contributes to the wet-right signal and vice versa. A value of 0 indicates no stereo-spread causing the reverb to sound like a monophonic signal. A value of 1 indicates maximum spread between the uncorrelated left and right channels. This subrange <code>[0;1]</code> is recommended for general usage. Values bigger than 1 increase (or exaggerate) the perception of the uncorrelated left and right signals. Otherwise, this setting should be considered as dimensionless quantity, with its maximum value existing for historical reasons. <attention>Under some circumstances, values bigger than 1 may induce a feedback into the signal which can be perceived as unpleasant.</attention></desc>
         </setting>
         <setting>
+            <name>attenuation-slew-min-ms</name>
+            <type>num</type>
+            <def>0.0</def>
+            <min>0.0</min>
+            <max>500.0</max>
+            <realtime/>
+            <desc>Shared minimum duration for selected pressure and expression attenuation
+                ramps. Duration is the maximum of this minimum and normalized remaining
+                distance times the full-range duration. Ramps are linear in controller value
+                and retarget from the current rendered value. Identical targets do not restart
+                ramps. Each source caps its minimum at its full-range duration; zero full-range
+                duration always bypasses smoothing.</desc>
+        </setting>
+        <setting>
+            <name>expression-y-attenuation-slew-ms</name>
+            <type>num</type>
+            <def>0.0</def>
+            <min>0.0</min>
+            <max>500.0</max>
+            <realtime/>
+            <desc>
+                Experimental Plainsound setting: full-range slew time for CC1 and CC74
+                sources on supported attenuation modulators. Uses the same eligibility,
+                eight-route capacity and delta-proportional timing as pressure attenuation
+                slew, with an independent time. Zero bypasses these sources. Pressure and
+                expression in the same modulator each advance at their own selected speed.
+                No attenuation routes are created when absent from the SoundFont.</desc>
+        </setting>
+        <setting>
+            <name>pressure-attenuation-slew-ms</name>
+            <type>num</type>
+            <def>0.0</def>
+            <min>0.0</min>
+            <max>500.0</max>
+            <realtime/>
+            <desc>
+                Experimental Plainsound setting: full-range slew time in milliseconds
+                for supported key/channel-pressure-to-attenuation modulators. A pressure
+                change of 127 units takes this duration; smaller changes take proportionally
+                less time. Zero disables the additional slew; fractional milliseconds are
+                accepted. Standard unipolar linear, concave and convex routes are supported.
+                Other destinations and unselected sources remain immediate. The first eight
+                supported routes in each voice's modulator order are slewed; excess routes
+                stay immediate and produce a diagnostic warning. Enabling on a held voice
+                initializes from current pressure. Changing a positive duration preserves
+                the current slew position; disabling adopts the unsmoothed target.
+                Updates use the render event queue. If it is full, a per-voice update is
+                rejected without publishing partial state; a subsequent controller or setting
+                update retries it. This setting does not change slot capacity or create
+                pressure-to-attenuation routes absent from the SoundFont.</desc>
+        </setting>
+        <setting>
             <name>sample-rate</name>
             <type>num</type>
             <def>44100.0</def>

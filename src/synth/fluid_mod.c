@@ -414,6 +414,48 @@ fluid_mod_transform_source_value(fluid_mod_t* mod, fluid_real_t val, const fluid
     return val;
 }
 
+/* fluid_mod_get_value_with_sources.
+ * evaluates a modulator using explicitly supplied control values
+ * and ranges; supports fractional inputs for standard continuous
+ * mappings; slew timing and state are handled separately
+ */
+
+ fluid_real_t
+ fluid_mod_get_value_with_sources(fluid_mod_t *mod,
+                                fluid_voice_t *voice,
+                                fluid_real_t value1,
+                                fluid_real_t range1,
+                                fluid_real_t value2,
+                                fluid_real_t range2)
+{
+    extern fluid_mod_t default_vel2filter_mod;
+
+    fluid_real_t mapped1;
+    fluid_real_t mapped2;
+    fluid_real_t result;
+
+    /* Preserve the existing default velocity-to-filter exception. */
+    if(fluid_mod_test_identity(mod, &default_vel2filter_mod))
+    {
+        return 0;
+    }
+
+    mapped1 = fluid_mod_transform_source_value(
+        mod, value1, range1, TRUE, voice);
+
+    mapped2 = fluid_mod_transform_source_value(
+        mod, value2, range2, FALSE, voice);
+
+    result = (fluid_real_t)mod->amount * mapped1 * mapped2;
+
+    if(mod->trans == FLUID_MOD_TRANSFORM_ABS)
+    {
+        result = FLUID_FABS(result);
+    }
+
+    return result;
+}
+
 /*
  * fluid_mod_get_value.
  * Computes and return modulator output following SF2.01
@@ -432,7 +474,6 @@ fluid_mod_get_value(fluid_mod_t *mod, fluid_voice_t *voice)
     extern fluid_mod_t default_vel2filter_mod;
 
     fluid_real_t v1, v2;
-    fluid_real_t final_value;
     /* The wording of the default modulators refers to a range of 127/128.
      * And the table in section 9.5.3 suggests, that this mapping should be applied
      * to all unipolar and bipolar mappings respectively.
@@ -488,24 +529,10 @@ fluid_mod_get_value(fluid_mod_t *mod, fluid_voice_t *voice)
      */
     v1 = fluid_mod_get_source_value(mod->src1, mod->flags1, &range1, voice);
 
-    /* transform the input value */
-    v1 = fluid_mod_transform_source_value(mod, v1, range1, TRUE, voice);
-
     /* get the second input source */
     v2 = fluid_mod_get_source_value(mod->src2, mod->flags2, &range2, voice);
 
-    /* transform the second input value */
-    v2 = fluid_mod_transform_source_value(mod, v2, range2, FALSE, voice);
-
-    /* it indeed is as simple as that: */
-    final_value = (fluid_real_t) mod->amount * v1 * v2;
-
-    /* check for absolute value transform */
-    if(mod->trans == FLUID_MOD_TRANSFORM_ABS)
-    {
-        final_value = FLUID_FABS(final_value);
-    }
-    return final_value;
+    return fluid_mod_get_value_with_sources(mod, voice, v1, range1, v2, range2);
 }
 
 /**

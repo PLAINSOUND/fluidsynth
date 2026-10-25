@@ -152,6 +152,8 @@ set ( libfluidsynth_SOURCES
     rvoice/fluid_lfo.c
     rvoice/fluid_lfo.h
     rvoice/fluid_rvoice.h
+    rvoice/fluid_rvoice_mod.h
+    rvoice/fluid_rvoice_mod.c
     rvoice/fluid_rvoice.c
     rvoice/fluid_rvoice_dsp.cpp
     rvoice/fluid_rvoice_event.h

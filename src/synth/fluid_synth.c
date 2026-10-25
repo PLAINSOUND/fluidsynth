@@ -28,6 +28,7 @@
 #include "fluid_dls.h"
 #include "fluid_audio_convert.h"
 #include "fluid_rev.h"
+#include <math.h>
 
 #ifdef TRAP_ON_FPE
 #define _GNU_SOURCE
@@ -136,6 +137,7 @@ static int fluid_parse_portamento_time_str(const char* value);
 
 /* Callback handlers for realtime settings */
 static void fluid_synth_handle_gain(void *data, const char *name, double value);
+static void fluid_synth_handle_pressure_slew(void *data, const char *name, double value);
 static void fluid_synth_handle_polyphony(void *data, const char *name, int value);
 static void fluid_synth_handle_device_id(void *data, const char *name, int value);
 static void fluid_synth_handle_overflow(void *data, const char *name, double value);
@@ -251,6 +253,12 @@ void fluid_synth_settings(fluid_settings_t *settings)
     fluid_settings_register_int(settings, "synth.polyphony", 256, 1, 65535, 0);
     fluid_settings_register_int(settings, "synth.midi-channels", 16, 16, 256, 0);
     fluid_settings_register_num(settings, "synth.gain", 0.2, 0.0, 10.0, 0);
+    fluid_settings_register_num(settings, "synth.attenuation-slew-min-ms", 0.0, 0.0, 500.0, 0);
+    /* Full-range pressure slew time in milliseconds; 0 preserves normal modulation. */
+    fluid_settings_register_num(settings, "synth.pressure-attenuation-slew-ms",
+                                0.0, 0.0, 500.0, 0);
+    fluid_settings_register_num(settings, "synth.expression-y-attenuation-slew-ms",
+                                0.0, 0.0, 500.0, 0);
     fluid_settings_register_int(settings, "synth.audio-channels", 1, 1, 128, 0);
     fluid_settings_register_int(settings, "synth.audio-groups", 1, 1, 128, 0);
     fluid_settings_register_int(settings, "synth.effects-channels", 2, 2, 2, 0);
@@ -799,6 +807,20 @@ new_fluid_synth(fluid_settings_t *settings)
     fluid_settings_getint(settings, "synth.effects-channels", &synth->effects_channels);
     fluid_settings_getint(settings, "synth.effects-groups", &synth->effects_groups);
     fluid_settings_getnum_float(settings, "synth.gain", &synth->gain);
+    fluid_settings_getnum(settings, "synth.pressure-attenuation-slew-ms",
+                           &synth->pressure_attenuation_slew_ms);
+    fluid_settings_getnum(settings, "synth.attenuation-slew-min-ms", &synth->attenuation_slew_min_ms);
+    if(!isfinite(synth->attenuation_slew_min_ms)) synth->attenuation_slew_min_ms = 0.0;
+    if(!isfinite(synth->pressure_attenuation_slew_ms))
+    {
+        synth->pressure_attenuation_slew_ms = 0.0;
+    }
+    fluid_settings_getnum(settings, "synth.expression-y-attenuation-slew-ms",
+                           &synth->expression_attenuation_slew_ms);
+    if(!isfinite(synth->expression_attenuation_slew_ms))
+    {
+        synth->expression_attenuation_slew_ms = 0.0;
+    }
     fluid_settings_getint(settings, "synth.device-id", &synth->device_id);
     fluid_settings_getint(settings, "synth.cpu-cores", &synth->cores);
 
@@ -815,6 +837,12 @@ new_fluid_synth(fluid_settings_t *settings)
     /* register the callbacks */
     fluid_settings_callback_num(settings, "synth.gain",
                                 fluid_synth_handle_gain, synth);
+    fluid_settings_callback_num(settings, "synth.pressure-attenuation-slew-ms",
+                                fluid_synth_handle_pressure_slew, synth);
+    fluid_settings_callback_num(settings, "synth.attenuation-slew-min-ms",
+                                fluid_synth_handle_pressure_slew, synth);
+    fluid_settings_callback_num(settings, "synth.expression-y-attenuation-slew-ms",
+                                fluid_synth_handle_pressure_slew, synth);
     fluid_settings_callback_int(settings, "synth.polyphony",
                                 fluid_synth_handle_polyphony, synth);
     fluid_settings_callback_int(settings, "synth.device-id",
@@ -1228,6 +1256,11 @@ delete_fluid_synth(fluid_synth_t *synth)
      * this synth has been deleted*/
 
     fluid_settings_callback_num(synth->settings, "synth.gain",
+                                NULL, NULL);
+    fluid_settings_callback_num(synth->settings, "synth.pressure-attenuation-slew-ms",
+                                NULL, NULL);
+    fluid_settings_callback_num(synth->settings, "synth.attenuation-slew-min-ms", NULL, NULL);
+    fluid_settings_callback_num(synth->settings, "synth.expression-y-attenuation-slew-ms",
                                 NULL, NULL);
     fluid_settings_callback_int(synth->settings, "synth.polyphony",
                                 NULL, NULL);
@@ -3020,6 +3053,7 @@ fluid_synth_modulate_voices_LOCAL(fluid_synth_t *synth, int chan, int is_cc, int
 {
     fluid_voice_t *voice;
     int i;
+    int result = FLUID_OK;
 
     for(i = 0; i < synth->polyphony; i++)
     {
@@ -3027,11 +3061,14 @@ fluid_synth_modulate_voices_LOCAL(fluid_synth_t *synth, int chan, int is_cc, int
 
         if(fluid_voice_get_channel(voice) == chan)
         {
-            fluid_voice_modulate(voice, is_cc, ctrl);
+            if(fluid_voice_modulate(voice, is_cc, ctrl) != FLUID_OK)
+            {
+                result = FLUID_FAILED;
+            }
         }
     }
 
-    return FLUID_OK;
+    return result;
 }
 
 /**
@@ -3856,6 +3893,39 @@ fluid_synth_set_sample_rate_immediately(fluid_synth_t *synth, float sample_rate)
 
 
 /* Handler for synth.gain setting. */
+static void
+fluid_synth_handle_pressure_slew(void *data, const char *name, double value)
+{
+    fluid_synth_t *synth = data;
+    int i;
+    if(!isfinite(value))
+    {
+        FLUID_LOG(FLUID_WARN, "Ignoring non-finite pressure slew duration");
+        return;
+    }
+    fluid_synth_api_enter(synth);
+    if(strcmp(name, "synth.attenuation-slew-min-ms") == 0)
+    {
+        synth->attenuation_slew_min_ms = value;
+    }
+    else if(strcmp(name, "synth.expression-y-attenuation-slew-ms") == 0)
+    {
+        synth->expression_attenuation_slew_ms = value;
+    }
+    else
+    {
+        synth->pressure_attenuation_slew_ms = value;
+    }
+    for(i = 0; i < synth->polyphony; i++)
+    {
+        if(fluid_voice_is_playing(synth->voice[i]))
+        {
+            fluid_voice_update_param(synth->voice[i], GEN_ATTENUATION);
+        }
+    }
+    fluid_synth_api_exit(synth);
+}
+
 static void
 fluid_synth_handle_gain(void *data, const char *name, double value)
 {
