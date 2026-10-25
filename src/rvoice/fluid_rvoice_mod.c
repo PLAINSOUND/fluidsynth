@@ -79,7 +79,7 @@ fluid_rvoice_mod_input_valid(unsigned char source, unsigned char flags,
 {
     fluid_real_t range = fluid_rvoice_mod_source_range(source, flags);
 
-    if(!isfinite(value))
+    if(!fluid_isfinite(value))
     {
         return 0;
     }
@@ -158,7 +158,7 @@ int fluid_rvoice_mod_enqueue_minimum(fluid_rvoice_eventhandler_t *handler,
     fluid_rvoice_mod_t *record, fluid_real_t samples)
 {
     fluid_rvoice_param_t param[MAX_EVENT_PARAMS] = {0};
-    if(!isfinite(samples) || samples < 0.0) return FLUID_FAILED;
+    if(!fluid_isfinite(samples) || samples < 0.0) return FLUID_FAILED;
     param[0].real = samples;
     return fluid_rvoice_eventhandler_push(handler, fluid_rvoice_mod_minimum_event, record, param);
 }
@@ -202,8 +202,8 @@ fluid_rvoice_mod_enqueue_times(fluid_rvoice_eventhandler_t *handler,
                              fluid_real_t full_range_samples, fluid_real_t expression_samples)
 {
     fluid_rvoice_param_t param[MAX_EVENT_PARAMS] = {0};
-    if(!isfinite(full_range_samples) || full_range_samples < 0.0 ||
-       !isfinite(expression_samples) || expression_samples < 0.0)
+    if(!fluid_isfinite(full_range_samples) || full_range_samples < 0.0 ||
+       !fluid_isfinite(expression_samples) || expression_samples < 0.0)
     {
         return FLUID_FAILED;
     }
@@ -229,9 +229,9 @@ fluid_rvoice_mod_config_valid_times(const fluid_mod_t *definition,
     fluid_rvoice_mod_t checked;
 
     /* Validate using producer-local storage; never inspect the live record. */
-    if(!isfinite(full_range_samples) || full_range_samples < 0.0 ||
-       !isfinite(expression_samples) || expression_samples < 0.0 ||
-       !isfinite(definition->amount) ||
+    if(!fluid_isfinite(full_range_samples) || full_range_samples < 0.0 ||
+       !fluid_isfinite(expression_samples) || expression_samples < 0.0 ||
+       !fluid_isfinite(definition->amount) ||
        !fluid_rvoice_mod_input_valid(definition->src1, definition->flags1, value1) ||
        !fluid_rvoice_mod_input_valid(definition->src2, definition->flags2, value2) ||
        fluid_rvoice_mod_init_times(&checked, definition, value1,
@@ -296,7 +296,7 @@ fluid_rvoice_mod_enqueue_inputs(fluid_rvoice_eventhandler_t *handler,
     /* Source-specific validation is consumer-side: the producer cannot read
      * record->definition, which may still be waiting to be configured.
      */
-    if(!isfinite(value1) || !isfinite(value2))
+    if(!fluid_isfinite(value1) || !fluid_isfinite(value2))
     {
         return FLUID_FAILED;
     }

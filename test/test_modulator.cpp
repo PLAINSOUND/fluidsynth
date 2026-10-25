@@ -6,6 +6,11 @@
 #include <array>
 #include <cmath>
 
+// Defined in fluid_synth.c. MSVC decorates C++ data symbols differently.
+extern "C" {
+extern fluid_mod_t default_vel2filter_mod;
+}
+
 // Range shall be set to 7bit resolution, i.e. 128
 constexpr fluid_real_t Range = 128.0;
 
@@ -375,7 +380,6 @@ static void test_fractional_source_values(void)
 
 static void test_explicit_source_default_exception(void)
 {
-    extern fluid_mod_t default_vel2filter_mod;
 
     fluid_mod_t *mod = new_fluid_mod();
 

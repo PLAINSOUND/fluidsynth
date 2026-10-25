@@ -810,14 +810,14 @@ new_fluid_synth(fluid_settings_t *settings)
     fluid_settings_getnum(settings, "synth.pressure-attenuation-slew-ms",
                            &synth->pressure_attenuation_slew_ms);
     fluid_settings_getnum(settings, "synth.attenuation-slew-min-ms", &synth->attenuation_slew_min_ms);
-    if(!isfinite(synth->attenuation_slew_min_ms)) synth->attenuation_slew_min_ms = 0.0;
-    if(!isfinite(synth->pressure_attenuation_slew_ms))
+    if(!fluid_isfinite(synth->attenuation_slew_min_ms)) synth->attenuation_slew_min_ms = 0.0;
+    if(!fluid_isfinite(synth->pressure_attenuation_slew_ms))
     {
         synth->pressure_attenuation_slew_ms = 0.0;
     }
     fluid_settings_getnum(settings, "synth.expression-y-attenuation-slew-ms",
                            &synth->expression_attenuation_slew_ms);
-    if(!isfinite(synth->expression_attenuation_slew_ms))
+    if(!fluid_isfinite(synth->expression_attenuation_slew_ms))
     {
         synth->expression_attenuation_slew_ms = 0.0;
     }
@@ -3898,7 +3898,7 @@ fluid_synth_handle_pressure_slew(void *data, const char *name, double value)
 {
     fluid_synth_t *synth = data;
     int i;
-    if(!isfinite(value))
+    if(!fluid_isfinite(value))
     {
         FLUID_LOG(FLUID_WARN, "Ignoring non-finite pressure slew duration");
         return;

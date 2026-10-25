@@ -2,6 +2,30 @@
 #include "fluid_rvoice_mod.h"
 #include "fluid_rvoice_event.h"
 #include <math.h>
+#include <float.h>
+
+/* Do not rely on C99 NAN/INFINITY macros in Solaris' C90 mode. */
+static double test_nonfinite(int nan)
+{
+    uint64_t bits = (uint64_t)0x7ff00000 << 32;
+    double value;
+    if(nan) bits |= (uint64_t)0x00080000 << 32;
+    FLUID_MEMCPY(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void test_finite_classification(void)
+{
+    TEST_ASSERT(fluid_isfinite(0.0));
+    TEST_ASSERT(fluid_isfinite(-0.0));
+    TEST_ASSERT(fluid_isfinite(DBL_MAX));
+    TEST_ASSERT(fluid_isfinite(-DBL_MAX));
+    TEST_ASSERT(fluid_isfinite(DBL_MIN));
+    TEST_ASSERT(fluid_isfinite(DBL_MIN / 2.0));
+    TEST_ASSERT(!fluid_isfinite(test_nonfinite(0)));
+    TEST_ASSERT(!fluid_isfinite(-test_nonfinite(0)));
+    TEST_ASSERT(!fluid_isfinite(test_nonfinite(1)));
+}
 
 static void test_snapshot(void)
 {
@@ -232,9 +256,9 @@ static void test_invalid_handoff(void)
     TEST_ASSERT(fluid_rvoice_mod_enqueue_config(&handler, &record, &definition,
                                                64.0, 128.0, -1.0) == FLUID_FAILED);
     TEST_ASSERT(fluid_rvoice_mod_enqueue_config(&handler, &record, &definition,
-                                               64.0, 128.0, INFINITY) == FLUID_FAILED);
+                                               64.0, 128.0, test_nonfinite(0)) == FLUID_FAILED);
     TEST_ASSERT(fluid_rvoice_mod_enqueue_inputs(&handler, &record,
-                                               NAN, 128.0) == FLUID_FAILED);
+                                               test_nonfinite(1), 128.0) == FLUID_FAILED);
     definition.flags1 = FLUID_MOD_CUSTOM;
     TEST_ASSERT(fluid_rvoice_mod_enqueue_config(&handler, &record, &definition,
                                                64.0, 128.0, 4800.0) == FLUID_FAILED);
@@ -423,6 +447,7 @@ static void test_expression_times(void)
 
 int main(void)
 {
+    test_finite_classification();
     test_expression_times();
     test_snapshot();
     test_selection();

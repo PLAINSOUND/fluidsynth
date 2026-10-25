@@ -192,6 +192,21 @@ char* fluid_get_windows_error(void);
 /*
  * Utility functions
  */
+/* Classify IEEE-754 doubles without C99 isfinite(), which Solaris does not
+ * expose in our C90 build mode. Bit inspection also avoids raising floating
+ * point exceptions when validating NaN with exception traps enabled.
+ * memcpy avoids aliasing violations; the integer mask works on either endian.
+ */
+static FLUID_INLINE int
+fluid_isfinite(double value)
+{
+    uint64_t bits;
+    typedef char fluid_double_size_check[sizeof(double) == sizeof(uint64_t) ? 1 : -1];
+    (void)sizeof(fluid_double_size_check);
+    FLUID_MEMCPY(&bits, &value, sizeof(bits));
+    return ((bits >> 52) & 0x7ff) != 0x7ff;
+}
+
 #if FLUID_IS_BIG_ENDIAN
 #define FLUID_FOURCC(_a, _b, _c, _d) \
     (uint32_t)(((uint32_t)(_a) << 24) | ((uint32_t)(_b) << 16) | ((uint32_t)(_c) << 8) | (uint32_t)(_d))
